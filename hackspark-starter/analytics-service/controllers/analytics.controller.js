@@ -120,6 +120,10 @@ function countRentalProduct(rental) {
   return rental.productId ?? rental.product_id;
 }
 
+function normalizeProductId(productId) {
+  return String(productId);
+}
+
 class AnalyticsController {
   async getPeakWindow(req, res) {
     try {
@@ -281,8 +285,9 @@ class AnalyticsController {
         const productId = countRentalProduct(rental);
         if (!productId) continue;
 
-        const currentCount = (frequencyMap.get(productId) || 0) + 1;
-        frequencyMap.set(productId, currentCount);
+        const normalizedProductId = normalizeProductId(productId);
+        const currentCount = (frequencyMap.get(normalizedProductId) || 0) + 1;
+        frequencyMap.set(normalizedProductId, currentCount);
         if (currentCount > maxFreq) maxFreq = currentCount;
       }
 
@@ -305,14 +310,16 @@ class AnalyticsController {
 
       const ids = topProducts.map((product) => product.productId).join(',');
       const prodJson = await fetchCentralJson(`/api/data/products/batch?ids=${ids}`);
-      const productMap = new Map((prodJson.data || []).map((product) => [product.id, product]));
+      const productMap = new Map(
+        (prodJson.data || []).map((product) => [normalizeProductId(product.id), product])
+      );
 
       const recommendations = topProducts.map((topProduct) => {
         const product = productMap.get(topProduct.productId) || {};
         return {
-          productId: topProduct.productId,
-          name: product.name,
-          category: product.category,
+          productId: Number(topProduct.productId),
+          name: product.name || `Product #${topProduct.productId}`,
+          category: product.category || 'UNCATEGORIZED',
           score: topProduct.score
         };
       });

@@ -25,7 +25,7 @@ export const formatDateTime = (dateString) => {
   }
 };
 
-export const getToday = () => new Date().toISOString().slice(0, 10);
+export const getToday = () => format(new Date(), 'yyyy-MM-dd');
 
 export const getThisMonth = () => getToday().slice(0, 7);
 
