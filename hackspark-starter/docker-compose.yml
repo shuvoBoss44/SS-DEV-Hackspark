@@ -14,11 +14,15 @@ services:
       # Replaced Postgres vars with Mongo URI
       - MONGO_URI=${MONGO_URI}
       - JWT_SECRET=${JWT_SECRET}
+      - CENTRAL_API_TOKEN=${CENTRAL_API_TOKEN}
+      - CENTRAL_API_URL=${CENTRAL_API_URL}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8001/status"]
       interval: 10s
       timeout: 5s
       retries: 3
+    depends_on:
+      - mongodb
 
   rental-service:
     build: ./rental-service

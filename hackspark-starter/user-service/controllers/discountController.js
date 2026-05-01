@@ -6,7 +6,7 @@ exports.getDiscount = async (req, res) => {
     const { id } = req.params;
 
     // Call Central API (Requires CENTRAL_API_TOKEN in env)
-    const centralApiUrl = `https://technocracy.brittoo.xyz/api/data/users/${id}`;
+    const centralApiUrl = `${process.env.CENTRAL_API_URL}/api/data/users/${id}`;
     
     let centralUser;
     try {
