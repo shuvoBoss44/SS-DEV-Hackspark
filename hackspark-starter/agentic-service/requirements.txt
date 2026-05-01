@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+motor
+langchain
+langchain-google-genai
+pydantic
