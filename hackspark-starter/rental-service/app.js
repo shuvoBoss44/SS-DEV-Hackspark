@@ -9,6 +9,8 @@ app.use(express.json());
 
 app.use("/rentals", productRoutes);
 
-app.listen(process.env.RENTAL_SERVICE_PORT, () => {
-    console.log(`Rental Service is running on port ${process.env.RENTAL_SERVICE_PORT}`);
+app.get('/status', (req, res) => res.status(200).json({ status: 'ok' }));
+
+app.listen((process.env.PORT || process.env.RENTAL_SERVICE_PORT || 3000), () => {
+    console.log(`Rental Service is running on port ${(process.env.PORT || process.env.RENTAL_SERVICE_PORT || 3000)}`);
 });

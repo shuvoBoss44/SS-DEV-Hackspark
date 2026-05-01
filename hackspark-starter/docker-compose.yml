@@ -28,6 +28,7 @@ services:
     environment:
       - PORT=8002
       - CENTRAL_API_TOKEN=${CENTRAL_API_TOKEN}
+      - CENTRAL_API_URL=${CENTRAL_API_URL}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8002/status"]
       interval: 10s
@@ -42,6 +43,7 @@ services:
     environment:
       - PORT=8003
       - CENTRAL_API_TOKEN=${CENTRAL_API_TOKEN}
+      - CENTRAL_API_URL=${CENTRAL_API_URL}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8003/status"]
       interval: 10s

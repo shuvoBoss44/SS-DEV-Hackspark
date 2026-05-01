@@ -2,7 +2,14 @@ const express = require('express');
 const mongoose = require('mongoose');
 require("dotenv").config({ path: "../.env" });
 
-const userRoutes = require('./routes/userRoutes');
+// Try loading userRoutes, but wrap in try-catch in case the file doesn't exist yet
+let userRoutes;
+try {
+  userRoutes = require('./routes/userRoutes');
+} catch (e) {
+  // Mock router if the file hasn't been created yet locally
+  userRoutes = express.Router();
+}
 
 const app = express();
 app.use(express.json()); // Parse JSON bodies
@@ -15,18 +22,25 @@ app.get('/status', (req, res) => {
 // Mount Routes
 app.use('/users', userRoutes);
 
-// Connect to MongoDB Atlas
-const PORT = process.env.PORT || 8001;
-const MONGO_ATLAS_URI = process.env.MONGO_ATLAS_URI;
+// Connect to MongoDB
+const PORT = process.env.PORT || process.env.USER_SERVICE_PORT || 3000;
+const MONGO_URI = process.env.MONGO_URI;
 
-mongoose.connect(MONGO_ATLAS_URI)
-  .then(() => {
-    console.log('User Service connected to MongoDB Atlas');
-    app.listen(PORT, () => {
-      console.log(`User Service running on port ${PORT}`);
+if (MONGO_URI) {
+  mongoose.connect(MONGO_URI)
+    .then(() => {
+      console.log('User Service connected to MongoDB');
+      app.listen(PORT, () => {
+        console.log(`User Service is running on port ${PORT}`);
+      });
+    })
+    .catch((err) => {
+      console.error('MongoDB connection error:', err);
+      process.exit(1);
     });
-  })
-  .catch((err) => {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
+} else {
+  // Fallback if no DB configured yet
+  app.listen(PORT, () => {
+    console.log(`User Service is running on port ${PORT} (No DB)`);
   });
+}
