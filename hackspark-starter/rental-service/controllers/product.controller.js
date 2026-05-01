@@ -138,6 +138,123 @@ class ProductController {
       return res.status(500).json({ error: 'Internal server error while communicating with Central API' });
     }
   }
+  async checkAvailability(req, res) {
+    try {
+      const { id } = req.params;
+      const { from, to } = req.query;
+
+      if (!from || !to) {
+        return res.status(400).json({ error: "Missing 'from' or 'to' query parameters" });
+      }
+
+      const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
+      const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
+
+      let allRentals = [];
+      let page = 1;
+      let totalPages = 1;
+
+      // Fetch all rentals for the product handling pagination
+      while (page <= totalPages) {
+        const response = await fetch(`${CENTRAL_API_URL}/api/data/rentals?product_id=${id}&limit=100&page=${page}`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+        
+        if (!response.ok) {
+          if (response.status === 429) {
+            return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
+          }
+          throw new Error('Failed to fetch rentals');
+        }
+
+        const json = await response.json();
+        if (json.data) allRentals.push(...json.data);
+        totalPages = json.totalPages || 1;
+        page++;
+      }
+
+      const parseDate = str => new Date(str + 'T00:00:00Z');
+      const formatDate = date => date.toISOString().split('T')[0];
+
+      const reqFrom = parseDate(from);
+      const reqTo = parseDate(to);
+
+      // Filter overlapping rentals
+      const overlapping = allRentals.filter(r => {
+        const rFrom = parseDate(r.from);
+        const rTo = parseDate(r.to);
+        return rFrom <= reqTo && rTo >= reqFrom;
+      });
+
+      // Merge overlapping busy periods
+      const intervals = overlapping.map(r => ({ start: parseDate(r.from), end: parseDate(r.to) }));
+      intervals.sort((a, b) => a.start - b.start);
+
+      const merged = [];
+      for (const interval of intervals) {
+        if (merged.length === 0) {
+          merged.push(interval);
+        } else {
+          const last = merged[merged.length - 1];
+          if (last.end >= interval.start) {
+            last.end = new Date(Math.max(last.end, interval.end));
+          } else {
+            merged.push(interval);
+          }
+        }
+      }
+
+      // Calculate free windows within the requested range
+      const freeWindows = [];
+      let currentStart = new Date(reqFrom);
+
+      for (const busy of merged) {
+        if (currentStart < busy.start) {
+          const freeEnd = new Date(busy.start);
+          freeEnd.setDate(freeEnd.getDate() - 1);
+          
+          const actualFreeEnd = new Date(Math.min(freeEnd, reqTo));
+          if (actualFreeEnd >= currentStart) {
+            freeWindows.push({
+              start: formatDate(currentStart),
+              end: formatDate(actualFreeEnd)
+            });
+          }
+        }
+        
+        const nextPossibleStart = new Date(busy.end);
+        nextPossibleStart.setDate(nextPossibleStart.getDate() + 1);
+        if (nextPossibleStart > currentStart) {
+          currentStart = nextPossibleStart;
+        }
+      }
+
+      if (currentStart <= reqTo) {
+        freeWindows.push({
+          start: formatDate(currentStart),
+          end: formatDate(reqTo)
+        });
+      }
+
+      const busyPeriodsFormatted = merged.map(b => ({
+        start: formatDate(b.start),
+        end: formatDate(b.end)
+      }));
+
+      return res.status(200).json({
+        productId: parseInt(id),
+        from,
+        to,
+        available: merged.length === 0,
+        busyPeriods: busyPeriodsFormatted,
+        freeWindows
+      });
+
+    } catch (error) {
+      console.error('Error checking availability:', error);
+      return res.status(500).json({ error: 'Internal server error while checking availability' });
+    }
+  }
 }
 
 module.exports = new ProductController();
