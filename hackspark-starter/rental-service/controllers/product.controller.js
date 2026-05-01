@@ -317,26 +317,67 @@ class ProductController {
         return res.status(404).json({ error: "k exceeds the total number of distinct dates available" });
       }
 
-      // Quickselect implementation for O(N) average time complexity finding Kth largest
-      const quickSelectDesc = (arr, left, right, targetIndex) => {
-        if (left === right) return arr[left];
+      // Option 1: Min-Heap Implementation (O(N log K) Time, O(K) Space)
+      class MinHeap {
+        constructor() { this.heap = []; }
         
-        const pivotValue = arr[right].count;
-        let pivotIndex = left;
-        for (let i = left; i < right; i++) {
-          if (arr[i].count > pivotValue) {
-            const temp = arr[i]; arr[i] = arr[pivotIndex]; arr[pivotIndex] = temp;
-            pivotIndex++;
+        insert(node) {
+          this.heap.push(node);
+          this.bubbleUp(this.heap.length - 1);
+        }
+        
+        extractMin() {
+          if (this.heap.length === 1) return this.heap.pop();
+          const min = this.heap[0];
+          this.heap[0] = this.heap.pop();
+          this.bubbleDown(0);
+          return min;
+        }
+        
+        peek() { return this.heap[0]; }
+        size() { return this.heap.length; }
+        
+        bubbleUp(index) {
+          while (index > 0) {
+            const parent = Math.floor((index - 1) / 2);
+            if (this.heap[index].count >= this.heap[parent].count) break;
+            const temp = this.heap[index];
+            this.heap[index] = this.heap[parent];
+            this.heap[parent] = temp;
+            index = parent;
           }
         }
-        const temp = arr[pivotIndex]; arr[pivotIndex] = arr[right]; arr[right] = temp;
+        
+        bubbleDown(index) {
+          const length = this.heap.length;
+          while (true) {
+            let left = 2 * index + 1;
+            let right = 2 * index + 2;
+            let smallest = index;
+            
+            if (left < length && this.heap[left].count < this.heap[smallest].count) smallest = left;
+            if (right < length && this.heap[right].count < this.heap[smallest].count) smallest = right;
+            if (smallest === index) break;
+            
+            const temp = this.heap[index];
+            this.heap[index] = this.heap[smallest];
+            this.heap[smallest] = temp;
+            index = smallest;
+          }
+        }
+      }
 
-        if (targetIndex === pivotIndex) return arr[targetIndex];
-        else if (targetIndex < pivotIndex) return quickSelectDesc(arr, left, pivotIndex - 1, targetIndex);
-        else return quickSelectDesc(arr, pivotIndex + 1, right, targetIndex);
-      };
+      const minHeap = new MinHeap();
+      for (const day of allDays) {
+        if (minHeap.size() < kNum) {
+          minHeap.insert(day);
+        } else if (day.count > minHeap.peek().count) {
+          minHeap.extractMin();
+          minHeap.insert(day);
+        }
+      }
 
-      const kthElement = quickSelectDesc(allDays, 0, allDays.length - 1, kNum - 1);
+      const kthElement = minHeap.peek();
 
       return res.status(200).json({
         from,
