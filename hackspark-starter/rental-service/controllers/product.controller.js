@@ -255,6 +255,102 @@ class ProductController {
       return res.status(500).json({ error: 'Internal server error while checking availability' });
     }
   }
+
+  async getKthBusiestDate(req, res) {
+    try {
+      const { from, to, k } = req.query;
+
+      const dateRegex = /^\d{4}-\d{2}$/;
+      if (!from || !to || !dateRegex.test(from) || !dateRegex.test(to)) {
+        return res.status(400).json({ error: "from and to must be valid YYYY-MM strings" });
+      }
+
+      const kNum = parseInt(k, 10);
+      if (isNaN(kNum) || kNum <= 0 || String(kNum) !== String(k)) {
+        return res.status(400).json({ error: "k must be a positive integer" });
+      }
+
+      const [fYear, fMonth] = from.split('-').map(Number);
+      const [tYear, tMonth] = to.split('-').map(Number);
+
+      if (fYear > tYear || (fYear === tYear && fMonth > tMonth)) {
+        return res.status(400).json({ error: "from must not be after to" });
+      }
+
+      const monthsDiff = (tYear - fYear) * 12 + (tMonth - fMonth);
+      if (monthsDiff > 11) { // 12 months maximum inclusive
+        return res.status(400).json({ error: "Max range is 12 months" });
+      }
+
+      const monthsToFetch = [];
+      let currY = fYear, currM = fMonth;
+      while (currY < tYear || (currY === tYear && currM <= tMonth)) {
+        monthsToFetch.push(`${currY}-${String(currM).padStart(2, '0')}`);
+        currM++;
+        if (currM > 12) { currM = 1; currY++; }
+      }
+
+      const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
+      const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
+
+      const allDays = [];
+      // Fetch data sequentially to avoid parallel rate limiting bursts
+      for (const m of monthsToFetch) {
+        const response = await fetch(`${CENTRAL_API_URL}/api/data/rentals/stats?group_by=date&month=${m}`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            return res.status(429).json({ error: 'Rate limit exceeded.' });
+          }
+          throw new Error(`Failed to fetch stats for ${m}`);
+        }
+
+        const json = await response.json();
+        if (json.data && Array.isArray(json.data)) {
+          allDays.push(...json.data);
+        }
+      }
+
+      if (kNum > allDays.length) {
+        return res.status(404).json({ error: "k exceeds the total number of distinct dates available" });
+      }
+
+      // Quickselect implementation for O(N) average time complexity finding Kth largest
+      const quickSelectDesc = (arr, left, right, targetIndex) => {
+        if (left === right) return arr[left];
+        
+        const pivotValue = arr[right].count;
+        let pivotIndex = left;
+        for (let i = left; i < right; i++) {
+          if (arr[i].count > pivotValue) {
+            const temp = arr[i]; arr[i] = arr[pivotIndex]; arr[pivotIndex] = temp;
+            pivotIndex++;
+          }
+        }
+        const temp = arr[pivotIndex]; arr[pivotIndex] = arr[right]; arr[right] = temp;
+
+        if (targetIndex === pivotIndex) return arr[targetIndex];
+        else if (targetIndex < pivotIndex) return quickSelectDesc(arr, left, pivotIndex - 1, targetIndex);
+        else return quickSelectDesc(arr, pivotIndex + 1, right, targetIndex);
+      };
+
+      const kthElement = quickSelectDesc(allDays, 0, allDays.length - 1, kNum - 1);
+
+      return res.status(200).json({
+        from,
+        to,
+        k: kNum,
+        date: kthElement.date.split('T')[0],
+        rentalCount: kthElement.count
+      });
+
+    } catch (error) {
+      console.error('Error fetching kth busiest date:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = new ProductController();
