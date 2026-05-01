@@ -6,5 +6,6 @@ router.get('/products', productController.getProducts);
 router.get('/products/:id', productController.getProductById);
 router.get('/products/:id/availability', productController.checkAvailability);
 router.get('/kth-busiest-date', productController.getKthBusiestDate);
+router.get('/users/:id/top-categories', productController.getTopCategories);
 
 module.exports = router;

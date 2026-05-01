@@ -392,6 +392,112 @@ class ProductController {
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
+
+  async getTopCategories(req, res) {
+    try {
+      const { id } = req.params;
+      const { k } = req.query;
+
+      const kNum = parseInt(k, 10);
+      if (isNaN(kNum) || kNum <= 0 || String(kNum) !== String(k)) {
+        return res.status(400).json({ error: "k must be a positive integer" });
+      }
+
+      const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
+      const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
+
+      const productCounts = {};
+      let page = 1;
+      let totalPages = 1;
+
+      while (page <= totalPages) {
+        const response = await fetch(`${CENTRAL_API_URL}/api/data/rentals?renter_id=${id}&limit=100&page=${page}`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            return res.status(429).json({ error: 'Rate limit exceeded.' });
+          }
+          throw new Error('Failed to fetch user rentals');
+        }
+
+        const json = await response.json();
+        if (json.data && Array.isArray(json.data)) {
+          for (const rental of json.data) {
+            if (rental.productId) {
+              productCounts[rental.productId] = (productCounts[rental.productId] || 0) + 1;
+            }
+          }
+        }
+        totalPages = json.totalPages || 1;
+        page++;
+      }
+
+      if (Object.keys(productCounts).length === 0) {
+        return res.status(200).json({ userId: parseInt(id), topCategories: [] });
+      }
+
+      const distinctIds = Object.keys(productCounts);
+      const categoryLookup = {};
+
+      // Batch fetch product details (max 50 per request)
+      for (let i = 0; i < distinctIds.length; i += 50) {
+        const chunk = distinctIds.slice(i, i + 50);
+        const response = await fetch(`${CENTRAL_API_URL}/api/data/products/batch?ids=${chunk.join(',')}`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            return res.status(429).json({ error: 'Rate limit exceeded.' });
+          }
+          const text = await response.text();
+          console.error('Batch fetch failed:', response.status, response.statusText, text);
+          throw new Error('Failed to fetch products batch');
+        }
+
+        const json = await response.json();
+        if (json.data && Array.isArray(json.data)) {
+          for (const product of json.data) {
+            categoryLookup[product.id] = product.category;
+          }
+        }
+      }
+
+      const categoryCounts = {};
+      for (const [pid, count] of Object.entries(productCounts)) {
+        const category = categoryLookup[pid];
+        if (category) {
+          categoryCounts[category] = (categoryCounts[category] || 0) + count;
+        }
+      }
+
+      const categoriesList = Object.entries(categoryCounts).map(([cat, count]) => ({
+        category: cat,
+        rentalCount: count
+      }));
+
+      // Bounded array trick to find top K categories
+      const topK = [];
+      for (const cat of categoriesList) {
+        topK.push(cat);
+        topK.sort((a, b) => b.rentalCount - a.rentalCount); // Sort descending
+        if (topK.length > kNum) {
+          topK.pop(); // Remove the smallest
+        }
+      }
+
+      return res.status(200).json({
+        userId: parseInt(id),
+        topCategories: topK
+      });
+
+    } catch (error) {
+      console.error('Error fetching top categories:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = new ProductController();
