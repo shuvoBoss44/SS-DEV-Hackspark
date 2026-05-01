@@ -67,12 +67,8 @@ exports.login = async (req, res) => {
 // GET /users/me
 exports.getMe = async (req, res) => {
   try {
-    // req.user is set by the auth middleware
-    const user = await User.findById(req.user.userId).select('-password');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json(user);
+    // req.user is set by the auth middleware (decoded from JWT)
+    res.json(req.user);
   } catch (error) {
     res.status(500).json({ error: 'Server error fetching profile' });
   }
