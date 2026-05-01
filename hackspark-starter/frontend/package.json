@@ -1,0 +1,7 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "mkdir dist && echo '<h1>RentPi Frontend Placeholder</h1>' > dist/index.html"
+  }
+}
