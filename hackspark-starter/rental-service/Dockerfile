@@ -1,20 +1,16 @@
-# Stage 1: Builder
-FROM node:20-alpine AS builder
+FROM node:20-alpine AS deps
 WORKDIR /app
-# Copy package manifests first for layer caching
 COPY package*.json ./
-# Clean install, omitting devDependencies to save space
-RUN npm install --omit=dev
-# Copy the rest of the source code
-COPY . .
+RUN npm ci --omit=dev
 
-# Stage 2: Lean Runtime
-FROM node:20-alpine
+FROM alpine:3.20
+RUN apk add --no-cache nodejs
 WORKDIR /app
-# Copy only the built modules and source from the builder stage
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app ./
-
-# Default command (Make sure your package.json has a "start" script)
-CMD ["npm", "start"]
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+COPY app.js ./
+COPY controllers ./controllers
+COPY routes ./routes
+EXPOSE 8002
+CMD ["node", "app.js"]

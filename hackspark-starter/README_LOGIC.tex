@@ -1,0 +1,960 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{titlesec}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codeborder}{RGB}{220,220,220}
+\definecolor{keyword}{RGB}{0,88,90}
+\definecolor{comment}{RGB}{105,105,105}
+
+\lstdefinestyle{jsstyle}{
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{codeborder},
+  keywordstyle=\color{keyword}\bfseries,
+  commentstyle=\color{comment},
+  showstringspaces=false,
+  tabsize=2
+}
+
+\lstset{style=jsstyle}
+\setlist[itemize]{topsep=3pt,itemsep=2pt}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt}
+
+\title{\textbf{RentPi HackSpark Project Logic Documentation}}
+\author{Team Documentation}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Project Overview}
+
+This project implements a microservice-based rental platform called \textbf{RentPi}. The original challenge asks teams to build a platform around a central historical data API. The system contains a frontend, an API gateway, several backend services, and MongoDB for local persistence.
+
+\subsection{Main Goal}
+
+The goal is to provide product browsing, authentication, rental analytics, product availability, seasonal recommendations, and an AI assistant that answers questions using real data.
+
+\subsection{High-Level Architecture}
+
+\begin{center}
+\begin{tabular}{|p{3.2cm}|p{2cm}|p{8cm}|}
+\hline
+\textbf{Service} & \textbf{Port} & \textbf{Responsibility} \\
+\hline
+Frontend & 3000 & React interface for users, products, availability, analytics, and chat. \\
+\hline
+API Gateway & 8000 & Single public backend entry point. Proxies requests to internal services. \\
+\hline
+User Service & 8001 & Registration, login, JWT authentication, discount tier lookup. \\
+\hline
+Rental Service & 8002 & Product proxy, availability, busiest dates, top categories, free streak, merged feed. \\
+\hline
+Analytics Service & 8003 & Peak window, surge days, and seasonal recommendations. \\
+\hline
+Agentic Service & 8004 & AI chatbot with data grounding and MongoDB-backed chat history. \\
+\hline
+MongoDB & 27017 & Stores users, chat sessions, and chat messages. \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Central API}
+
+The central API is read-only and provides historical RentPi data:
+
+\begin{itemize}
+  \item Categories
+  \item Users and security scores
+  \item Products
+  \item Rentals
+  \item Rental statistics by date or category
+\end{itemize}
+
+Every service that calls the central API attaches:
+
+\begin{lstlisting}
+Authorization: Bearer CENTRAL_API_TOKEN
+\end{lstlisting}
+
+\section{Request Flow}
+
+All browser requests go through the API gateway:
+
+\begin{lstlisting}
+Browser -> frontend:3000 -> api-gateway:8000 -> target service
+\end{lstlisting}
+
+The frontend never calls the central API directly. This protects the team token and keeps backend behavior centralized.
+
+\section{Environment Variables}
+
+Important environment variables:
+
+\begin{longtable}{|p{4cm}|p{10cm}|}
+\hline
+\textbf{Variable} & \textbf{Purpose} \\
+\hline
+\texttt{CENTRAL\_API\_URL} & Base URL of the central data API. \\
+\hline
+\texttt{CENTRAL\_API\_TOKEN} & Team token used for central API authorization. \\
+\hline
+\texttt{MONGO\_URI} & MongoDB connection string used by user-service and agentic-service. \\
+\hline
+\texttt{JWT\_SECRET} & Secret used to sign and verify JWT tokens. \\
+\hline
+\texttt{GEMINI\_API\_KEY} & API key for Gemini model used by the chat assistant. \\
+\hline
+\texttt{GEMINI\_MODEL} & Gemini model name, defaulting to \texttt{gemini-2.5-flash}. \\
+\hline
+\end{longtable}
+
+\newpage
+\section{Problem-by-Problem Logic}
+
+\subsection{P1: Health Checks}
+
+\subsubsection*{Goal}
+Every backend service must expose a health endpoint at:
+
+\begin{lstlisting}
+GET /status
+\end{lstlisting}
+
+The gateway must aggregate all downstream service statuses.
+
+\subsubsection*{Implemented Logic}
+
+Each service returns:
+
+\begin{lstlisting}
+{
+  "service": "service-name",
+  "status": "OK"
+}
+\end{lstlisting}
+
+The API gateway calls downstream services in parallel:
+
+\begin{lstlisting}
+Promise.all([
+  fetch("http://user-service:8001/status"),
+  fetch("http://rental-service:8002/status"),
+  fetch("http://analytics-service:8003/status"),
+  fetch("http://agentic-service:8004/status")
+])
+\end{lstlisting}
+
+Final gateway response:
+
+\begin{lstlisting}
+{
+  "service": "api-gateway",
+  "status": "OK",
+  "downstream": {
+    "user-service": "OK",
+    "rental-service": "OK",
+    "analytics-service": "OK",
+    "agentic-service": "OK"
+  }
+}
+\end{lstlisting}
+
+If a service cannot be reached, its status becomes:
+
+\begin{lstlisting}
+"UNREACHABLE"
+\end{lstlisting}
+
+\subsection{P2: User Authentication}
+
+\subsubsection*{Goal}
+Allow users to register, login, and view their authenticated profile.
+
+\subsubsection*{Endpoints}
+
+\begin{itemize}
+  \item \texttt{POST /users/register}
+  \item \texttt{POST /users/login}
+  \item \texttt{GET /users/me}
+\end{itemize}
+
+\subsubsection*{Register Logic}
+
+\begin{enumerate}
+  \item Read \texttt{name}, \texttt{email}, and \texttt{password} from request body.
+  \item Check if the email already exists in MongoDB.
+  \item If duplicate, return \texttt{409 Conflict}.
+  \item Hash password using \texttt{bcryptjs}.
+  \item Save user to MongoDB.
+  \item Generate JWT containing user id, name, and email.
+  \item Return token to the client.
+\end{enumerate}
+
+\subsubsection*{Login Logic}
+
+\begin{enumerate}
+  \item Find user by email.
+  \item If no user exists, return \texttt{401 Unauthorized}.
+  \item Compare submitted password with hashed password.
+  \item If password is wrong, return \texttt{401 Unauthorized}.
+  \item Generate and return JWT.
+\end{enumerate}
+
+\subsubsection*{Protected Profile Logic}
+
+The middleware reads:
+
+\begin{lstlisting}
+Authorization: Bearer <token>
+\end{lstlisting}
+
+Then it verifies the token using \texttt{JWT\_SECRET}. If valid, decoded user data is returned.
+
+\subsection{P3: Product Proxy}
+
+\subsubsection*{Goal}
+Rental service proxies product requests to the central API while hiding the team token.
+
+\subsubsection*{Endpoints}
+
+\begin{itemize}
+  \item \texttt{GET /rentals/products}
+  \item \texttt{GET /rentals/products/:id}
+\end{itemize}
+
+\subsubsection*{Logic}
+
+For list products:
+
+\begin{lstlisting}
+GET /rentals/products?category=TOOLS&page=2&limit=20
+\end{lstlisting}
+
+The service forwards all query parameters to:
+
+\begin{lstlisting}
+GET /api/data/products?category=TOOLS&page=2&limit=20
+\end{lstlisting}
+
+For product detail:
+
+\begin{lstlisting}
+GET /rentals/products/42
+\end{lstlisting}
+
+The service calls:
+
+\begin{lstlisting}
+GET /api/data/products/42
+\end{lstlisting}
+
+Errors from the central API are translated to useful API responses.
+
+\subsection{P4: Docker Compose and Multistage Builds}
+
+\subsubsection*{Goal}
+Run the full stack using:
+
+\begin{lstlisting}
+docker compose up --build
+\end{lstlisting}
+
+\subsubsection*{Implemented Logic}
+
+The project defines all services in \texttt{docker-compose.yml}. Each backend service has a Dockerfile with dependency installation and runtime stages.
+
+For optimized service images:
+
+\begin{itemize}
+  \item Dependencies are installed with \texttt{npm ci --omit=dev}.
+  \item Runtime images use lean Alpine with Node.js.
+  \item \texttt{.dockerignore} excludes \texttt{node\_modules}, logs, markdown, and unnecessary folders.
+  \item Runtime stages copy only required app files.
+\end{itemize}
+
+\subsection{P5: Paginated Product Listing with Category Filter}
+
+\subsubsection*{Goal}
+List products with pagination and optional category validation.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /rentals/products?category=TOOLS&page=2&limit=20
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item If category is provided, fetch valid categories from central API.
+  \item Cache category list for one hour.
+  \item If category is invalid, return \texttt{400} with all valid categories.
+  \item Forward all query parameters to central products endpoint.
+  \item Return the central API pagination envelope unchanged.
+\end{enumerate}
+
+\subsubsection*{Why Cache Categories?}
+
+The central API has rate limits. Without caching, every product list request with category would make an extra central API call. Caching reduces unnecessary requests.
+
+\subsection{P6: Loyalty Discount}
+
+\subsubsection*{Goal}
+Return a user's discount tier based on security score.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /users/:id/discount
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item Fetch user from central API.
+  \item Read \texttt{securityScore}.
+  \item Apply discount tier mapping.
+  \item Return user id, score, and discount percent.
+\end{enumerate}
+
+\subsubsection*{Discount Mapping}
+
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+\textbf{Security Score} & \textbf{Discount} \\
+\hline
+80--100 & 20\% \\
+\hline
+60--79 & 15\% \\
+\hline
+40--59 & 10\% \\
+\hline
+20--39 & 5\% \\
+\hline
+0--19 & 0\% \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{P7: Product Availability}
+
+\subsubsection*{Goal}
+Check whether a product is available in a requested date range.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /rentals/products/:id/availability?from=2024-03-01&to=2024-03-14
+\end{lstlisting}
+
+\subsubsection*{Core Algorithm}
+
+The main challenge is overlapping rental periods. The service solves this using interval merging.
+
+\begin{enumerate}
+  \item Fetch all rentals for product using pagination.
+  \item Keep rentals that overlap the requested range.
+  \item Convert each rental to interval \texttt{[start, end]}.
+  \item Sort intervals by start date.
+  \item Merge overlapping intervals.
+  \item Scan merged intervals to compute free windows.
+  \item If no busy period overlaps, product is available.
+\end{enumerate}
+
+\subsubsection*{Interval Merge Example}
+
+Input:
+
+\begin{lstlisting}
+[2024-03-01, 2024-03-05]
+[2024-03-04, 2024-03-08]
+[2024-03-12, 2024-03-15]
+\end{lstlisting}
+
+Merged:
+
+\begin{lstlisting}
+[2024-03-01, 2024-03-08]
+[2024-03-12, 2024-03-15]
+\end{lstlisting}
+
+\subsection{P8: Kth Busiest Date}
+
+\subsubsection*{Goal}
+Find the kth busiest rental date across a month range.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /rentals/kth-busiest-date?from=2024-01&to=2024-06&k=3
+\end{lstlisting}
+
+\subsubsection*{Validation}
+
+\begin{itemize}
+  \item \texttt{from} and \texttt{to} must be valid \texttt{YYYY-MM}.
+  \item \texttt{k} must be a positive integer.
+  \item \texttt{from} must not be after \texttt{to}.
+  \item Range must be at most 12 months.
+\end{itemize}
+
+\subsubsection*{Algorithm}
+
+Instead of sorting every day, the service uses a min-heap of size \texttt{k}.
+
+\begin{enumerate}
+  \item Fetch rental stats for each month.
+  \item For each day-count pair:
+  \begin{itemize}
+    \item If heap size is less than \texttt{k}, insert the day.
+    \item Else if current count is greater than heap minimum, remove minimum and insert current day.
+  \end{itemize}
+  \item After processing all days, heap root is the kth busiest day.
+\end{enumerate}
+
+\subsubsection*{Complexity}
+
+\begin{lstlisting}
+Time: O(N log K)
+Space: O(K)
+\end{lstlisting}
+
+This is better than sorting all dates, which would be:
+
+\begin{lstlisting}
+O(N log N)
+\end{lstlisting}
+
+\subsection{P9: Renter Top Categories}
+
+\subsubsection*{Goal}
+Find top categories rented by a user.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /rentals/users/:id/top-categories?k=5
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item Fetch all rentals by renter id.
+  \item Count rentals per product id.
+  \item Deduplicate product ids.
+  \item Fetch product details using batch endpoint, max 50 ids per call.
+  \item Map product id to category.
+  \item Count rentals per category.
+  \item Return top \texttt{k} categories.
+\end{enumerate}
+
+\subsubsection*{Why Batch Product Fetching?}
+
+The central API supports:
+
+\begin{lstlisting}
+GET /api/data/products/batch?ids=1,2,3
+\end{lstlisting}
+
+Using this avoids one request per product, reducing latency and avoiding rate-limit problems.
+
+\subsection{P10: Longest Free Streak}
+
+\subsubsection*{Goal}
+Find the longest continuous period in a year when a product was not rented.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /rentals/products/:id/free-streak?year=2023
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item Validate year.
+  \item Fetch all rentals for product.
+  \item Keep rentals that overlap the target year.
+  \item Clip rentals to year boundaries.
+  \item Sort busy periods by start date.
+  \item Merge overlapping or adjacent busy periods.
+  \item Scan gaps between busy periods.
+  \item Return the longest inclusive free streak.
+\end{enumerate}
+
+\subsubsection*{Important Boundary Rule}
+
+Rental dates are treated as occupied days. Therefore:
+
+\begin{itemize}
+  \item A free period before a rental ends at one day before rental start.
+  \item A free period after a rental begins one day after rental end.
+\end{itemize}
+
+Example:
+
+\begin{lstlisting}
+Busy: 2023-04-10 to 2023-04-12
+Free before busy period ends at: 2023-04-09
+Free after busy period starts at: 2023-04-13
+\end{lstlisting}
+
+\subsection{P11: Seven-Day Peak Window}
+
+\subsubsection*{Goal}
+Find the 7-day window with the highest total rentals in a month range.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /analytics/peak-window?from=2024-01&to=2024-06
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item Validate month range.
+  \item Fetch rental date stats for every month.
+  \item Create full calendar array from first day of \texttt{from} to last day of \texttt{to}.
+  \item Fill missing dates with count \texttt{0}.
+  \item Use sliding window of size 7.
+  \item Track maximum sum and best start date.
+\end{enumerate}
+
+\subsubsection*{Sliding Window}
+
+Initial sum:
+
+\begin{lstlisting}
+sum = day1 + day2 + ... + day7
+\end{lstlisting}
+
+Move one day:
+
+\begin{lstlisting}
+sum = sum - old_left_day + new_right_day
+\end{lstlisting}
+
+\subsubsection*{Complexity}
+
+\begin{lstlisting}
+Time: O(N)
+Space: O(N)
+\end{lstlisting}
+
+\subsection{P12: Unified Feed}
+
+\subsubsection*{Goal}
+Merge rental histories for multiple products into one chronological feed.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /rentals/merged-feed?productIds=12,47,88&limit=30
+\end{lstlisting}
+
+\subsubsection*{Validation}
+
+\begin{itemize}
+  \item Product ids must be 1--10 comma-separated integers.
+  \item Duplicates are deduplicated.
+  \item Limit must be positive and at most 100.
+\end{itemize}
+
+\subsubsection*{Algorithm}
+
+Each product rental history is already sorted by \texttt{rentalStart}. The service merges sorted lists using two pointers and divide-and-conquer merging.
+
+\begin{enumerate}
+  \item Fetch first \texttt{limit} rentals for each product id.
+  \item Treat each product rental list as one sorted stream.
+  \item Merge pairs of sorted streams.
+  \item Keep only first \texttt{limit} records.
+\end{enumerate}
+
+\subsubsection*{Two-Pointer Merge}
+
+\begin{lstlisting}
+while both lists have records:
+  compare rentalStart
+  push earlier record
+  advance that list pointer
+\end{lstlisting}
+
+\subsection{P13: Surge Days}
+
+\subsubsection*{Goal}
+For each day in a month, find the next future day with a strictly higher rental count.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /analytics/surge-days?month=2024-03
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item Validate month.
+  \item Fetch rental stats for month.
+  \item Build complete calendar for month.
+  \item Fill missing dates with count \texttt{0}.
+  \item Use monotonic stack to find next greater day.
+\end{enumerate}
+
+\subsubsection*{Monotonic Stack Explanation}
+
+The stack stores days waiting for a future higher count. When current day count is greater than stack top, that current day is the answer for the popped day.
+
+\begin{lstlisting}
+for each day i:
+  while stack not empty and count[i] > count[stack.top]:
+    popped = stack.pop()
+    answer[popped] = i
+  stack.push(i)
+\end{lstlisting}
+
+\subsubsection*{Complexity}
+
+\begin{lstlisting}
+Time: O(N)
+Space: O(N)
+\end{lstlisting}
+
+\subsection{P14: Seasonal Recommendations}
+
+\subsubsection*{Goal}
+Recommend products historically rented around the same date in the past two years.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+GET /analytics/recommendations?date=2024-06-15&limit=10
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item Validate date and limit.
+  \item For each of the past two years:
+  \begin{itemize}
+    \item Build 15-day seasonal window: 7 days before and 7 days after target date.
+  \end{itemize}
+  \item Fetch all rentals in those windows.
+  \item Count frequency per product id.
+  \item Use bucket sorting by frequency to select top products.
+  \item Enrich top product ids using batch product endpoint.
+  \item Return product id, name, category, and score.
+\end{enumerate}
+
+\subsubsection*{Why Use a Date Library?}
+
+Date windows can cross month or year boundaries. For example:
+
+\begin{lstlisting}
+date = 2024-01-03
+window = 2023-12-27 to 2024-01-10
+\end{lstlisting}
+
+The implementation uses \texttt{dayjs} to handle this safely.
+
+\subsection{P15: RentPi Assistant}
+
+\subsubsection*{Goal}
+Build an AI assistant that answers RentPi questions using grounded platform data.
+
+\subsubsection*{Endpoint}
+
+\begin{lstlisting}
+POST /chat
+Body: { "sessionId": "abc123", "message": "Which category had the most rentals?" }
+\end{lstlisting}
+
+\subsubsection*{Main Rules}
+
+\begin{itemize}
+  \item Refuse unrelated questions before calling the LLM.
+  \item Fetch real data for supported RentPi questions.
+  \item Inject fetched data into model prompt.
+  \item Never invent numbers when data is missing.
+\end{itemize}
+
+\subsubsection*{Topic Guard}
+
+The service first checks whether the message contains RentPi-related keywords:
+
+\begin{lstlisting}
+rent, rental, product, category, price, availability,
+discount, trend, recommendation, peak, surge
+\end{lstlisting}
+
+If the message is unrelated, it returns a fixed refusal and does not call Gemini.
+
+\subsubsection*{Intent Classification}
+
+The service classifies user messages into intents:
+
+\begin{itemize}
+  \item Most rented category
+  \item Product availability
+  \item Recommendations
+  \item Peak window
+  \item Surge days
+  \item Discount tier
+  \item Product detail
+  \item General RentPi help
+\end{itemize}
+
+\subsubsection*{Grounding}
+
+For each intent, the service fetches data from either:
+
+\begin{itemize}
+  \item Central API
+  \item Rental service
+  \item Analytics service
+  \item User service
+\end{itemize}
+
+Then it sends the data to Gemini with an instruction:
+
+\begin{lstlisting}
+Use only this grounded data. Do not invent missing numbers.
+\end{lstlisting}
+
+\subsection{P16: Chat That Remembers}
+
+\subsubsection*{Goal}
+Support persistent named chat sessions.
+
+\subsubsection*{Endpoints}
+
+\begin{itemize}
+  \item \texttt{GET /chat/sessions}
+  \item \texttt{GET /chat/:sessionId/history}
+  \item \texttt{DELETE /chat/:sessionId}
+\end{itemize}
+
+\subsubsection*{MongoDB Collections}
+
+\textbf{sessions}
+
+\begin{lstlisting}
+sessionId
+name
+createdAt
+lastMessageAt
+\end{lstlisting}
+
+\textbf{messages}
+
+\begin{lstlisting}
+sessionId
+role: "user" | "assistant"
+content
+timestamp
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item On every chat message, load previous messages for the session.
+  \item Pass recent history to Gemini.
+  \item Save user message and assistant reply.
+  \item Update session \texttt{lastMessageAt}.
+  \item For a new session, generate a short title using the LLM.
+\end{enumerate}
+
+\subsection{P17: Frontend Dashboard}
+
+\subsubsection*{Goal}
+Build a user-facing dashboard that calls only the API gateway.
+
+\subsubsection*{Implemented Pages}
+
+\begin{itemize}
+  \item \texttt{/login}: user login form.
+  \item \texttt{/register}: registration form.
+  \item \texttt{/products}: product list with pagination and category filter.
+  \item \texttt{/availability}: product availability checker.
+  \item \texttt{/chat}: AI assistant with session sidebar.
+  \item \texttt{/profile}: user discount lookup.
+  \item \texttt{/insights}: surge and peak-window analytics.
+  \item \texttt{/trending}: seasonal recommendations.
+\end{itemize}
+
+\subsubsection*{Frontend API Rule}
+
+The frontend uses:
+
+\begin{lstlisting}
+const API_BASE = "http://localhost:8000"
+\end{lstlisting}
+
+All requests go to the gateway.
+
+\subsection{P18: Trending Today Widget}
+
+\subsubsection*{Goal}
+Show today's seasonal product recommendations.
+
+\subsubsection*{Endpoint Used}
+
+\begin{lstlisting}
+GET /analytics/recommendations?date=TODAY&limit=6
+\end{lstlisting}
+
+\subsubsection*{Logic}
+
+\begin{enumerate}
+  \item Compute today's date dynamically in JavaScript.
+  \item Fetch recommendations through gateway.
+  \item Show skeleton cards while loading.
+  \item Show friendly error message on failure.
+  \item Render product cards with name, category, and score.
+  \item Provide refresh button.
+\end{enumerate}
+
+\subsection{P19: Lean Images}
+
+\subsubsection*{Goal}
+Keep Docker final image sizes under target limits.
+
+\subsubsection*{Optimization Logic}
+
+\begin{itemize}
+  \item Use multistage Dockerfiles.
+  \item Use \texttt{npm ci --omit=dev}.
+  \item Move \texttt{nodemon} to dev dependencies.
+  \item Remove unused \texttt{bun} dependency from production services.
+  \item Use Alpine runtime with Node.js.
+  \item Add \texttt{.dockerignore} files.
+  \item Copy only required runtime files.
+\end{itemize}
+
+\subsubsection*{Verified Image Sizes}
+
+\begin{center}
+\begin{tabular}{|p{5cm}|p{3cm}|p{3cm}|}
+\hline
+\textbf{Service} & \textbf{Target} & \textbf{Verified Size} \\
+\hline
+api-gateway & $<$ 150 MB & 100 MB \\
+\hline
+user-service & $<$ 150 MB & 118 MB \\
+\hline
+rental-service & $<$ 150 MB & 95.7 MB \\
+\hline
+analytics-service & $<$ 150 MB & 98 MB \\
+\hline
+agentic-service & $<$ 300 MB & 226 MB \\
+\hline
+frontend & $<$ 50 MB & 6.41 MB \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Bonus Problems}
+
+\subsection{B1: gRPC Internal Communication}
+
+The README describes a possible bonus where the agentic service can communicate with analytics-service or rental-service using gRPC. This project keeps HTTP communication for internal grounding calls. Therefore, this bonus is not implemented.
+
+\subsection{B2: Graceful Rate Limit Handling}
+
+The README describes exponential backoff with jitter for central API \texttt{429} responses. Some services handle rate limits by returning clear \texttt{429} messages or throttling central requests, but full B2 exponential backoff with jitter is not implemented everywhere.
+
+\section{Important Algorithms Summary}
+
+\begin{longtable}{|p{4cm}|p{5cm}|p{5cm}|}
+\hline
+\textbf{Problem} & \textbf{Algorithm} & \textbf{Reason} \\
+\hline
+P7 Availability & Sort and merge intervals & Correctly handles overlapping rentals. \\
+\hline
+P8 Kth busiest date & Min-heap of size K & Finds kth largest without sorting all dates. \\
+\hline
+P10 Free streak & Merge busy intervals and scan gaps & Finds longest free continuous date range. \\
+\hline
+P11 Peak window & Sliding window & Computes best 7-day period in linear time. \\
+\hline
+P12 Merged feed & Two-pointer sorted-list merge & Merges sorted rental streams efficiently. \\
+\hline
+P13 Surge days & Monotonic stack & Finds next greater rental count in linear time. \\
+\hline
+P14 Recommendations & Frequency map and bucket selection & Finds top seasonal products efficiently. \\
+\hline
+\end{longtable}
+
+\section{How to Run}
+
+\subsection{Local Docker}
+
+\begin{lstlisting}
+cp .env.example .env
+# Fill in CENTRAL_API_TOKEN, JWT_SECRET, GEMINI_API_KEY
+docker compose up --build
+\end{lstlisting}
+
+\subsection{Service URLs}
+
+\begin{itemize}
+  \item Frontend: \url{http://localhost:3000}
+  \item API Gateway: \url{http://localhost:8000}
+  \item User Service: \url{http://localhost:8001}
+  \item Rental Service: \url{http://localhost:8002}
+  \item Analytics Service: \url{http://localhost:8003}
+  \item Agentic Service: \url{http://localhost:8004}
+\end{itemize}
+
+\section{Verification Checklist}
+
+\begin{itemize}
+  \item \texttt{npm run build} passes in frontend.
+  \item Backend JavaScript syntax checks pass.
+  \item \texttt{docker compose build} passes.
+  \item \texttt{docker compose up -d} starts all services.
+  \item All services become healthy.
+  \item Gateway \texttt{/status} returns all downstream services as \texttt{OK}.
+  \item Frontend returns HTTP 200.
+\end{itemize}
+
+\section{Conclusion}
+
+This RentPi project is a complete microservice system for a rental platform. The API gateway provides a clean entry point, user-service manages authentication and discounts, rental-service implements product and rental algorithms, analytics-service computes demand insights, agentic-service provides grounded AI chat, and the frontend presents the system through a usable dashboard.
+
+The most important engineering ideas are:
+
+\begin{itemize}
+  \item Protect external API tokens by routing through backend services.
+  \item Use efficient algorithms for rental data problems.
+  \item Cache stable data such as categories.
+  \item Keep AI responses grounded in fetched data.
+  \item Keep Docker images lean for reliable deployment.
+\end{itemize}
+
+\end{document}

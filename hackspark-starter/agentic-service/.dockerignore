@@ -1,0 +1,7 @@
+node_modules
+npm-debug.log
+.git
+.DS_Store
+*.md
+test_models.js
+list_models.js

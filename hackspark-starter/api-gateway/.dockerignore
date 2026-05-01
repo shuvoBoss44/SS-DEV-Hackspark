@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+.git
+.DS_Store
+*.md
+bun.lock
+config
+controllers
+middlewares
+model
+routes

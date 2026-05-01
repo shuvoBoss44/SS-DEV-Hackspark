@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.git
+.DS_Store
+*.md
+bun.lock
+config
+middlewares/.gitkeep
+controllers/.gitkeep
+routes/.gitkeep

@@ -564,13 +564,19 @@ class ProductController {
       // Sort by start date
       busyPeriods.sort((a, b) => a.start - b.start);
 
-      // Merge overlapping periods
+      const addDays = (date, days) => {
+        const next = new Date(date);
+        next.setUTCDate(next.getUTCDate() + days);
+        return next;
+      };
+
+      // Merge overlapping or adjacent busy periods.
       const mergedPeriods = [];
       if (busyPeriods.length > 0) {
         let current = busyPeriods[0];
         for (let i = 1; i < busyPeriods.length; i++) {
           const next = busyPeriods[i];
-          if (next.start <= current.end) {
+          if (next.start <= addDays(current.end, 1)) {
             if (next.end > current.end) {
               current.end = next.end;
             }
@@ -583,9 +589,9 @@ class ProductController {
       }
 
       const formatDate = (date) => date.toISOString().split('T')[0];
-      const getDiffDays = (start, end) => {
+      const getInclusiveDays = (start, end) => {
         const msPerDay = 1000 * 60 * 60 * 24;
-        return Math.round((end - start) / msPerDay);
+        return Math.round((end - start) / msPerDay) + 1;
       };
 
       let longestStreak = {
@@ -598,22 +604,24 @@ class ProductController {
 
       for (const period of mergedPeriods) {
         if (currentPtr < period.start) {
-          const diff = getDiffDays(currentPtr, period.start);
+          const freeEnd = addDays(period.start, -1);
+          const diff = getInclusiveDays(currentPtr, freeEnd);
           if (diff > longestStreak.days) {
             longestStreak = {
               from: formatDate(currentPtr),
-              to: formatDate(period.start),
+              to: formatDate(freeEnd),
               days: diff
             };
           }
         }
-        if (currentPtr < period.end) {
-          currentPtr = new Date(period.end);
+        const nextFreeStart = addDays(period.end, 1);
+        if (currentPtr < nextFreeStart) {
+          currentPtr = nextFreeStart;
         }
       }
 
-      if (currentPtr < yearEnd) {
-        const diff = getDiffDays(currentPtr, yearEnd);
+      if (currentPtr <= yearEnd) {
+        const diff = getInclusiveDays(currentPtr, yearEnd);
         if (diff > longestStreak.days) {
           longestStreak = {
             from: formatDate(currentPtr),

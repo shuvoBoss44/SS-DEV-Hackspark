@@ -1,15 +1,12 @@
-# Stage 1: Builder
-FROM node:20-alpine AS builder
+FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --omit=dev
-COPY . .
+RUN npm ci --omit=dev
 
-# Stage 2: Lean Runtime
-FROM node:20-alpine
+FROM alpine:3.20
+RUN apk add --no-cache nodejs
 WORKDIR /app
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app ./
-
-CMD ["npm", "start"]
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+EXPOSE 8003
+CMD ["node", "app.js"]

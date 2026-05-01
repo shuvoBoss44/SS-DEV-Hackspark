@@ -24,9 +24,6 @@ obj/
 .env.*.local
 *.env
 
-# Docker
-.dockerignore
-
 # OS
 .DS_Store
 Thumbs.db

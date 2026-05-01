@@ -25,18 +25,19 @@ app.get('/status', async (req, res) => {
     const statuses = await Promise.all(services.map(async (service) => {
         try {
             const response = await fetch(service.url, { signal: AbortSignal.timeout(2000) });
-            return { [service.name]: response.ok ? 'up' : 'down' };
+            return { [service.name]: response.ok ? 'OK' : 'UNREACHABLE' };
         } catch (e) {
-            return { [service.name]: 'down' };
+            return { [service.name]: 'UNREACHABLE' };
         }
     }));
 
-    const aggregated = Object.assign({}, ...statuses);
-    const allUp = Object.values(aggregated).every(status => status === 'up');
+    const downstream = Object.assign({}, ...statuses);
+    const allUp = Object.values(downstream).every(status => status === 'OK');
 
     res.status(allUp ? 200 : 207).json({
-        gateway: 'up',
-        services: aggregated
+        service: 'api-gateway',
+        status: 'OK',
+        downstream
     });
 });
 
@@ -44,13 +45,19 @@ app.get('/status', async (req, res) => {
 app.use(createProxyMiddleware({ pathFilter: '/rentals', target: 'http://rental-service:8002', changeOrigin: true }));
 app.use(createProxyMiddleware({ pathFilter: '/users', target: 'http://user-service:8001', changeOrigin: true }));
 app.use(createProxyMiddleware({ pathFilter: '/analytics', target: 'http://analytics-service:8003', changeOrigin: true }));
+const longProxyOptions = {
+    proxyTimeout: 65000,
+    timeout: 65000
+};
+
 app.use(createProxyMiddleware({ 
     pathFilter: '/intelligence', 
     target: 'http://agentic-service:8004', 
     changeOrigin: true,
-    pathRewrite: { '^/intelligence': '' }
+    pathRewrite: { '^/intelligence': '' },
+    ...longProxyOptions
 }));
-app.use(createProxyMiddleware({ pathFilter: '/chat', target: 'http://agentic-service:8004', changeOrigin: true }));
+app.use(createProxyMiddleware({ pathFilter: '/chat', target: 'http://agentic-service:8004', changeOrigin: true, ...longProxyOptions }));
 
 app.listen((process.env.PORT || process.env.GATEWAY_PORT || 3000), () => {
     console.log(`API Gateway is running on port ${(process.env.PORT || process.env.GATEWAY_PORT || 3000)}`);
