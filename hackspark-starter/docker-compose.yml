@@ -12,7 +12,7 @@ services:
     environment:
       - PORT=8001
       # Replaced Postgres vars with Mongo URI
-      - MONGO_URI=${MONGO_ATLAS_URI} 
+      - MONGO_URI=${MONGO_URI}
       - JWT_SECRET=${JWT_SECRET}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8001/status"]
@@ -55,10 +55,10 @@ services:
       - "8004:8004"
     environment:
       - PORT=8004
-      - MONGO_URI=${MONGO_ATLAS_URI}
+      - MONGO_URI=${MONGO_URI}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/status')"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8004/status"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -96,3 +96,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # -------------------------
+  # DATABASE
+  # -------------------------
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  mongo_data:

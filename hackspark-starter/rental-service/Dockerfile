@@ -4,7 +4,7 @@ WORKDIR /app
 # Copy package manifests first for layer caching
 COPY package*.json ./
 # Clean install, omitting devDependencies to save space
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 # Copy the rest of the source code
 COPY . .
 
