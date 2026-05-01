@@ -498,6 +498,145 @@ class ProductController {
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
+
+  async getFreeStreak(req, res) {
+    try {
+      const { id } = req.params;
+      const { year } = req.query;
+
+      if (!year || !/^\d{4}$/.test(year)) {
+        return res.status(400).json({ error: "year must be a valid 4-digit number" });
+      }
+
+      const yearStart = new Date(`${year}-01-01T00:00:00Z`);
+      const yearEnd = new Date(`${year}-12-31T00:00:00Z`);
+
+      const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
+      const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
+
+      let page = 1;
+      let totalPages = 1;
+      const allRentals = [];
+
+      while (page <= totalPages) {
+        const response = await fetch(`${CENTRAL_API_URL}/api/data/rentals?product_id=${id}&limit=100&page=${page}`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            return res.status(429).json({ error: 'Rate limit exceeded.' });
+          }
+          throw new Error('Failed to fetch rentals');
+        }
+
+        const json = await response.json();
+        if (json.data && Array.isArray(json.data)) {
+          allRentals.push(...json.data);
+        }
+        totalPages = json.totalPages || 1;
+        page++;
+      }
+
+      const busyPeriods = [];
+      for (const rental of allRentals) {
+        let rStart = new Date(rental.rentalStart.split('T')[0] + 'T00:00:00Z');
+        let rEnd = new Date(rental.rentalEnd.split('T')[0] + 'T00:00:00Z');
+
+        // Filter out rentals that do not overlap with the year at all
+        if (rEnd < yearStart || rStart > yearEnd) {
+          continue;
+        }
+
+        // Clip the rental to the year boundaries
+        if (rStart < yearStart) rStart = new Date(yearStart);
+        if (rEnd > yearEnd) rEnd = new Date(yearEnd);
+
+        busyPeriods.push({ start: rStart, end: rEnd });
+      }
+
+      // Sort by start date
+      busyPeriods.sort((a, b) => a.start - b.start);
+
+      // Merge overlapping periods
+      const mergedPeriods = [];
+      if (busyPeriods.length > 0) {
+        let current = busyPeriods[0];
+        for (let i = 1; i < busyPeriods.length; i++) {
+          const next = busyPeriods[i];
+          if (next.start <= current.end) {
+            if (next.end > current.end) {
+              current.end = next.end;
+            }
+          } else {
+            mergedPeriods.push(current);
+            current = next;
+          }
+        }
+        mergedPeriods.push(current);
+      }
+
+      const formatDate = (date) => date.toISOString().split('T')[0];
+      const getDiffDays = (start, end) => {
+        const msPerDay = 1000 * 60 * 60 * 24;
+        return Math.round((end - start) / msPerDay);
+      };
+
+      let longestStreak = {
+        from: null,
+        to: null,
+        days: -1
+      };
+
+      let currentPtr = new Date(yearStart);
+
+      for (const period of mergedPeriods) {
+        if (currentPtr < period.start) {
+          const diff = getDiffDays(currentPtr, period.start);
+          if (diff > longestStreak.days) {
+            longestStreak = {
+              from: formatDate(currentPtr),
+              to: formatDate(period.start),
+              days: diff
+            };
+          }
+        }
+        if (currentPtr < period.end) {
+          currentPtr = new Date(period.end);
+        }
+      }
+
+      if (currentPtr < yearEnd) {
+        const diff = getDiffDays(currentPtr, yearEnd);
+        if (diff > longestStreak.days) {
+          longestStreak = {
+            from: formatDate(currentPtr),
+            to: formatDate(yearEnd),
+            days: diff
+          };
+        }
+      }
+
+      // Handle edge case where product was fully booked all year
+      if (longestStreak.days === -1) {
+        longestStreak = {
+          from: null,
+          to: null,
+          days: 0
+        };
+      }
+
+      return res.status(200).json({
+        productId: parseInt(id),
+        year: parseInt(year),
+        longestFreeStreak: longestStreak
+      });
+
+    } catch (error) {
+      console.error('Error calculating free streak:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = new ProductController();
