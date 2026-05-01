@@ -1,7 +1,12 @@
 require("dotenv").config({ path: "../.env" });
 const express = require("express");
 
+const logger = require('./middlewares/logger');
+
 const app = express();
+
+app.use(logger);
+app.use(express.json());
 
 const analyticsRoutes = require('./routes/analytics.routes');
 
