@@ -30,12 +30,11 @@ app.get('/status', async (req, res) => {
     });
 });
 
-// Set up proxy routing to backend microservices
-// Using container names since this will run in Docker Compose
-app.use('/rentals', createProxyMiddleware({ target: 'http://rental-service:8002', changeOrigin: true }));
-app.use('/users', createProxyMiddleware({ target: 'http://user-service:8001', changeOrigin: true }));
-app.use('/analytics', createProxyMiddleware({ target: 'http://analytics-service:8003', changeOrigin: true }));
-app.use('/intelligence', createProxyMiddleware({ target: 'http://agentic-service:8004', changeOrigin: true }));
+// Set up proxy routing to backend microservices using pathFilter to preserve full paths
+app.use(createProxyMiddleware({ pathFilter: '/rentals', target: 'http://rental-service:8002', changeOrigin: true }));
+app.use(createProxyMiddleware({ pathFilter: '/users', target: 'http://user-service:8001', changeOrigin: true }));
+app.use(createProxyMiddleware({ pathFilter: '/analytics', target: 'http://analytics-service:8003', changeOrigin: true }));
+app.use(createProxyMiddleware({ pathFilter: '/intelligence', target: 'http://agentic-service:8004', changeOrigin: true }));
 
 app.listen((process.env.PORT || process.env.GATEWAY_PORT || 3000), () => {
     console.log(`API Gateway is running on port ${(process.env.PORT || process.env.GATEWAY_PORT || 3000)}`);
