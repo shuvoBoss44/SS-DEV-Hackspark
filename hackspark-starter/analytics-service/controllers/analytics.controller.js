@@ -125,6 +125,83 @@ class AnalyticsController {
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
+
+  async getSurgeDays(req, res) {
+    try {
+      const { month } = req.query;
+
+      if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+        return res.status(400).json({ error: "month must be a valid YYYY-MM string" });
+      }
+
+      const [yearStr, monthStr] = month.split('-');
+      const year = parseInt(yearStr, 10);
+      const m = parseInt(monthStr, 10);
+      
+      const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
+      const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
+
+      const response = await fetch(`${CENTRAL_API_URL}/api/data/rentals/stats?group_by=date&month=${month}`, {
+        headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+      });
+
+      if (!response.ok) {
+        if (response.status === 429) {
+          return res.status(429).json({ error: 'Rate limit exceeded.' });
+        }
+        throw new Error(`Failed to fetch stats for ${month}`);
+      }
+
+      const json = await response.json();
+      const rawData = Array.isArray(json.data) ? json.data : [];
+
+      const lastDayOfMonth = new Date(Date.UTC(year, m, 0)).getUTCDate();
+      
+      const calendar = [];
+      const dailyCountsMap = new Map();
+
+      for (let i = 1; i <= lastDayOfMonth; i++) {
+        const dateStr = `${month}-${String(i).padStart(2, '0')}`;
+        calendar.push({
+          date: dateStr,
+          count: 0,
+          nextSurgeDate: null,
+          daysUntil: null
+        });
+        dailyCountsMap.set(dateStr, i - 1);
+      }
+
+      // Overlay fetched data
+      for (const entry of rawData) {
+        const dStr = entry.date.split('T')[0];
+        if (dailyCountsMap.has(dStr)) {
+          const idx = dailyCountsMap.get(dStr);
+          calendar[idx].count = entry.count;
+        }
+      }
+
+      // O(N) Monotonic Stack Algorithm
+      const stack = [];
+
+      for (let i = 0; i < calendar.length; i++) {
+        while (stack.length > 0 && calendar[i].count > calendar[stack[stack.length - 1]].count) {
+          const poppedIndex = stack.pop();
+          calendar[poppedIndex].nextSurgeDate = calendar[i].date;
+          calendar[poppedIndex].daysUntil = i - poppedIndex;
+        }
+        stack.push(i);
+      }
+
+      return res.status(200).json({
+        month,
+        data: calendar
+      });
+
+    } catch (error) {
+      console.error('Error fetching surge days:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = new AnalyticsController();
