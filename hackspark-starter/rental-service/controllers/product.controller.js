@@ -3,7 +3,7 @@ class ProductController {
     this.cachedCategories = null;
     this.categoriesCacheTime = 0;
     this.CACHE_TTL = 1000 * 60 * 60; // 1 hour cache
-    
+
     // Bind methods to ensure `this` context is correct
     this.getCategories = this.getCategories.bind(this);
     this.getProducts = this.getProducts.bind(this);
@@ -14,23 +14,23 @@ class ProductController {
     if (this.cachedCategories && (Date.now() - this.categoriesCacheTime < this.CACHE_TTL)) {
       return this.cachedCategories;
     }
-    
+
     const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
     const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
-    
+
     const response = await fetch(`${CENTRAL_API_URL}/api/data/categories`, {
       headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       const error = new Error('Failed to fetch categories');
       error.status = response.status;
       error.details = data;
       throw error;
     }
-    
+
     this.cachedCategories = data.categories;
     this.categoriesCacheTime = Date.now();
     return this.cachedCategories;
@@ -39,7 +39,7 @@ class ProductController {
   async getProducts(req, res) {
     try {
       const category = req.query.category;
-      
+
       // Step 1: Validate category if provided (P5)
       if (category) {
         try {
@@ -62,35 +62,35 @@ class ProductController {
       // Step 2: Fetch products (P3 logic extended for P5)
       const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
       const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
-      
+
       const queryParams = new URLSearchParams(req.query).toString();
       const url = `${CENTRAL_API_URL}/api/data/products${queryParams ? '?' + queryParams : ''}`;
-      
+
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${CENTRAL_API_TOKEN}`
         }
       });
-      
+
       let data = {};
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
-          data = await response.json();
+        data = await response.json();
       } else {
-          data = { message: await response.text() };
+        data = { message: await response.text() };
       }
-      
+
       if (!response.ok) {
         let message = 'An error occurred while fetching products';
         if (response.status === 404) message = 'Products not found';
         if (response.status === 429) message = 'Rate limit exceeded. Please try again later.';
-        
+
         return res.status(response.status).json({
           error: message,
           details: data
         });
       }
-      
+
       // Return the full envelope exactly as received
       return res.status(200).json(data);
     } catch (error) {
@@ -103,35 +103,35 @@ class ProductController {
     try {
       const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
       const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
-      
+
       const { id } = req.params;
       const url = `${CENTRAL_API_URL}/api/data/products/${id}`;
-      
+
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${CENTRAL_API_TOKEN}`
         }
       });
-      
+
       let data = {};
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
-          data = await response.json();
+        data = await response.json();
       } else {
-          data = { message: await response.text() };
+        data = { message: await response.text() };
       }
-      
+
       if (!response.ok) {
         let message = 'An error occurred while fetching the product';
         if (response.status === 404) message = 'Product not found';
         if (response.status === 429) message = 'Rate limit exceeded. Please try again later.';
-        
+
         return res.status(response.status).json({
           error: message,
           details: data
         });
       }
-      
+
       return res.status(200).json(data);
     } catch (error) {
       console.error('Error fetching product by ID:', error);
@@ -159,7 +159,7 @@ class ProductController {
         const response = await fetch(`${CENTRAL_API_URL}/api/data/rentals?product_id=${id}&limit=100&page=${page}`, {
           headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
         });
-        
+
         if (!response.ok) {
           if (response.status === 429) {
             return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
@@ -212,7 +212,7 @@ class ProductController {
         if (currentStart < busy.start) {
           const freeEnd = new Date(busy.start);
           freeEnd.setDate(freeEnd.getDate() - 1);
-          
+
           const actualFreeEnd = new Date(Math.min(freeEnd, reqTo));
           if (actualFreeEnd >= currentStart) {
             freeWindows.push({
@@ -221,7 +221,7 @@ class ProductController {
             });
           }
         }
-        
+
         const nextPossibleStart = new Date(busy.end);
         nextPossibleStart.setDate(nextPossibleStart.getDate() + 1);
         if (nextPossibleStart > currentStart) {
@@ -320,12 +320,12 @@ class ProductController {
       // Option 1: Min-Heap Implementation (O(N log K) Time, O(K) Space)
       class MinHeap {
         constructor() { this.heap = []; }
-        
+
         insert(node) {
           this.heap.push(node);
           this.bubbleUp(this.heap.length - 1);
         }
-        
+
         extractMin() {
           if (this.heap.length === 1) return this.heap.pop();
           const min = this.heap[0];
@@ -333,10 +333,10 @@ class ProductController {
           this.bubbleDown(0);
           return min;
         }
-        
+
         peek() { return this.heap[0]; }
         size() { return this.heap.length; }
-        
+
         bubbleUp(index) {
           while (index > 0) {
             const parent = Math.floor((index - 1) / 2);
@@ -347,18 +347,18 @@ class ProductController {
             index = parent;
           }
         }
-        
+
         bubbleDown(index) {
           const length = this.heap.length;
           while (true) {
             let left = 2 * index + 1;
             let right = 2 * index + 2;
             let smallest = index;
-            
+
             if (left < length && this.heap[left].count < this.heap[smallest].count) smallest = left;
             if (right < length && this.heap[right].count < this.heap[smallest].count) smallest = right;
             if (smallest === index) break;
-            
+
             const temp = this.heap[index];
             this.heap[index] = this.heap[smallest];
             this.heap[smallest] = temp;
