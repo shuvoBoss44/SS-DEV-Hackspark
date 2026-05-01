@@ -637,6 +637,128 @@ class ProductController {
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
+
+  async getMergedFeed(req, res) {
+    try {
+      const { productIds, limit } = req.query;
+
+      if (!productIds) {
+        return res.status(400).json({ error: "productIds is required" });
+      }
+
+      const idsStrArray = productIds.split(',');
+      if (idsStrArray.length === 0 || idsStrArray.length > 10) {
+        return res.status(400).json({ error: "Must provide 1 to 10 product IDs" });
+      }
+
+      const uniqueIds = new Set();
+      for (const idStr of idsStrArray) {
+        const pId = parseInt(idStr.trim(), 10);
+        if (isNaN(pId) || pId <= 0) {
+          return res.status(400).json({ error: "Invalid product ID" });
+        }
+        uniqueIds.add(pId);
+      }
+      const idsArray = Array.from(uniqueIds);
+
+      const limitNum = parseInt(limit, 10);
+      if (isNaN(limitNum) || limitNum <= 0 || limitNum > 100) {
+        return res.status(400).json({ error: "Limit must be a positive integer max 100" });
+      }
+
+      const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
+      const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
+
+      // Only fetch the first `limit` items for each product since the merged feed is capped at limit.
+      const streams = [];
+      for (const pid of idsArray) {
+        const response = await fetch(`${CENTRAL_API_URL}/api/data/rentals?product_id=${pid}&limit=${limitNum}&page=1`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            return res.status(429).json({ error: 'Rate limit exceeded.' });
+          }
+          throw new Error(`Failed to fetch rentals for product ${pid}`);
+        }
+
+        const json = await response.json();
+        if (json.data && Array.isArray(json.data)) {
+          streams.push(json.data);
+        } else {
+          streams.push([]);
+        }
+      }
+
+      // Merge Two Sorted Lists helper function
+      const mergeTwoLists = (list1, list2, maxLimit) => {
+        const merged = [];
+        let i = 0;
+        let j = 0;
+
+        while (i < list1.length && j < list2.length && merged.length < maxLimit) {
+          const date1 = new Date(list1[i].rentalStart);
+          const date2 = new Date(list2[j].rentalStart);
+          
+          if (date1 <= date2) {
+            merged.push(list1[i]);
+            i++;
+          } else {
+            merged.push(list2[j]);
+            j++;
+          }
+        }
+
+        while (i < list1.length && merged.length < maxLimit) {
+          merged.push(list1[i]);
+          i++;
+        }
+        
+        while (j < list2.length && merged.length < maxLimit) {
+          merged.push(list2[j]);
+          j++;
+        }
+
+        return merged;
+      };
+
+      // Divide and conquer merge
+      const mergeKLists = (lists, left, right, maxLimit) => {
+        if (left === right) return lists[left];
+        if (left < right) {
+          const mid = Math.floor((left + right) / 2);
+          const l1 = mergeKLists(lists, left, mid, maxLimit);
+          const l2 = mergeKLists(lists, mid + 1, right, maxLimit);
+          return mergeTwoLists(l1, l2, maxLimit);
+        }
+        return [];
+      };
+
+      let finalMerged = [];
+      if (streams.length > 0) {
+        finalMerged = mergeKLists(streams, 0, streams.length - 1, limitNum);
+      }
+
+      // Format response exactly as requested
+      const formattedFeed = finalMerged.map(r => ({
+        rentalId: r.id,
+        productId: r.productId,
+        rentalStart: r.rentalStart.split('T')[0],
+        rentalEnd: r.rentalEnd.split('T')[0]
+      }));
+
+      return res.status(200).json({
+        productIds: idsArray,
+        limit: limitNum,
+        feed: formattedFeed
+      });
+
+    } catch (error) {
+      console.error('Error in merged feed:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = new ProductController();

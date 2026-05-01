@@ -8,5 +8,6 @@ router.get('/products/:id/availability', productController.checkAvailability);
 router.get('/products/:id/free-streak', productController.getFreeStreak);
 router.get('/kth-busiest-date', productController.getKthBusiestDate);
 router.get('/users/:id/top-categories', productController.getTopCategories);
+router.get('/merged-feed', productController.getMergedFeed);
 
 module.exports = router;
