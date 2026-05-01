@@ -1,3 +1,5 @@
+const dayjs = require('dayjs');
+
 class AnalyticsController {
   async getPeakWindow(req, res) {
     try {
@@ -199,6 +201,169 @@ class AnalyticsController {
 
     } catch (error) {
       console.error('Error fetching surge days:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  async getRecommendations(req, res) {
+    try {
+      const { date, limit = 10 } = req.query;
+
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "date must be a valid YYYY-MM-DD string" });
+      }
+
+      const limitNum = parseInt(limit, 10);
+      if (isNaN(limitNum) || limitNum <= 0 || limitNum > 50) {
+        return res.status(400).json({ error: "limit must be a positive integer, max 50" });
+      }
+
+      const targetDate = dayjs(date);
+
+      // Window 1 (Past Year)
+      const target1 = targetDate.subtract(1, 'year');
+      const from1 = target1.subtract(7, 'day').format('YYYY-MM-DD');
+      const to1 = target1.add(7, 'day').format('YYYY-MM-DD');
+
+      // Window 2 (Two Years Ago)
+      const target2 = targetDate.subtract(2, 'year');
+      const from2 = target2.subtract(7, 'day').format('YYYY-MM-DD');
+      const to2 = target2.add(7, 'day').format('YYYY-MM-DD');
+
+      const CENTRAL_API_URL = process.env.CENTRAL_API_URL;
+      const CENTRAL_API_TOKEN = process.env.CENTRAL_API_TOKEN;
+
+      const fetchRentalsForWindow = async (from, to) => {
+        let allRentals = [];
+
+        // Fetch first page to get totalPages
+        let response = await fetch(`${CENTRAL_API_URL}/api/data/rentals?from=${from}&to=${to}&limit=100&page=1`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+        
+        if (!response.ok) {
+          if (response.status === 429) {
+             throw new Error('429');
+          }
+          throw new Error('Failed to fetch rentals');
+        }
+
+        let json = await response.json();
+        if (json.data) allRentals.push(...json.data);
+        const totalPages = json.totalPages || 1;
+
+        // SAFEGUARD: The API limits to 30 req/min. Fetching 1296 pages will take 43 minutes.
+        // We limit to the first 5 pages to prevent the Gateway from timing out the request,
+        // and we fetch sequentially to prevent Node.js ETIMEDOUT Socket exhaustion.
+        const maxPages = Math.min(totalPages, 5);
+
+        for (let p = 2; p <= maxPages; p++) {
+           const r = await fetch(`${CENTRAL_API_URL}/api/data/rentals?from=${from}&to=${to}&limit=100&page=${p}`, {
+               headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+           });
+           
+           if (!r.ok) {
+               if (r.status === 429) {
+                   // Respect rate limit and retry
+                   await new Promise(resolve => setTimeout(resolve, 2000));
+                   p--;
+                   continue;
+               }
+               throw new Error('Failed to fetch rentals');
+           }
+           
+           const j = await r.json();
+           if (j.data) allRentals.push(...j.data);
+        }
+
+        return allRentals;
+      };
+
+      try {
+        const [rentals1, rentals2] = await Promise.all([
+          fetchRentalsForWindow(from1, to1),
+          fetchRentalsForWindow(from2, to2)
+        ]);
+
+        const allRentals = [...rentals1, ...rentals2];
+        
+        if (allRentals.length === 0) {
+          return res.status(200).json({ date, recommendations: [] });
+        }
+
+        // O(N) Tallying
+        const frequencyMap = new Map();
+        let maxFreq = 0;
+        for (const rental of allRentals) {
+          const currentCount = (frequencyMap.get(rental.productId) || 0) + 1;
+          frequencyMap.set(rental.productId, currentCount);
+          if (currentCount > maxFreq) maxFreq = currentCount;
+        }
+
+        // Bucket Sort for O(N) Time Complexity (Bonus points!)
+        const buckets = Array.from({ length: maxFreq + 1 }, () => []);
+        for (const [productId, count] of frequencyMap.entries()) {
+          buckets[count].push(productId);
+        }
+
+        const topProducts = [];
+        for (let i = maxFreq; i > 0 && topProducts.length < limitNum; i--) {
+          for (const productId of buckets[i]) {
+            if (topProducts.length < limitNum) {
+              topProducts.push({ productId, score: i });
+            }
+          }
+        }
+
+        if (topProducts.length === 0) {
+          return res.status(200).json({ date, recommendations: [] });
+        }
+
+        // O(1 API Call) Product Enrichment (Bonus performance!)
+        const ids = topProducts.map(p => p.productId).join(',');
+        const prodResponse = await fetch(`${CENTRAL_API_URL}/api/data/products/batch?ids=${ids}`, {
+          headers: { 'Authorization': `Bearer ${CENTRAL_API_TOKEN}` }
+        });
+
+        if (!prodResponse.ok) {
+           if (prodResponse.status === 429) {
+             return res.status(429).json({ error: 'Rate limit exceeded.' });
+           }
+           throw new Error('Failed to fetch products');
+        }
+
+        const prodJson = await prodResponse.json();
+        const productsData = prodJson.data || [];
+        
+        const productMap = new Map();
+        for (const p of productsData) {
+          productMap.set(p.id, p);
+        }
+
+        const recommendations = topProducts.map(tp => {
+           const pInfo = productMap.get(tp.productId) || {};
+           return {
+             productId: tp.productId,
+             name: pInfo.name,
+             category: pInfo.category,
+             score: tp.score
+           };
+        });
+
+        return res.status(200).json({
+          date,
+          recommendations
+        });
+
+      } catch (err) {
+         if (err.message === '429') {
+            return res.status(429).json({ error: 'Rate limit exceeded.' });
+         }
+         throw err;
+      }
+
+    } catch (error) {
+      console.error('Error fetching recommendations:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }

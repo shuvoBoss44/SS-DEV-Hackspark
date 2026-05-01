@@ -180,14 +180,20 @@ class ProductController {
       const reqTo = parseDate(to);
 
       // Filter overlapping rentals
+      const getRentalStart = rental => rental.from || rental.rentalStart;
+      const getRentalEnd = rental => rental.to || rental.rentalEnd;
+
       const overlapping = allRentals.filter(r => {
-        const rFrom = parseDate(r.from);
-        const rTo = parseDate(r.to);
+        const rFrom = parseDate(getRentalStart(r).split('T')[0]);
+        const rTo = parseDate(getRentalEnd(r).split('T')[0]);
         return rFrom <= reqTo && rTo >= reqFrom;
       });
 
       // Merge overlapping busy periods
-      const intervals = overlapping.map(r => ({ start: parseDate(r.from), end: parseDate(r.to) }));
+      const intervals = overlapping.map(r => ({
+        start: parseDate(getRentalStart(r).split('T')[0]),
+        end: parseDate(getRentalEnd(r).split('T')[0])
+      }));
       intervals.sort((a, b) => a.start - b.start);
 
       const merged = [];
